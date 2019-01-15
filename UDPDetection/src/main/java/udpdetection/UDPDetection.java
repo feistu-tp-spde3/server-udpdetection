@@ -19,10 +19,11 @@ import org.apache.activemq.BlobMessage;
 public class UDPDetection {
 
     public static void main(String[] args) throws IOException, JMSException {
-        System.out.println("Monitoring adresses:");
+        System.out.println("[UDPDetection] Starting");
+        System.out.println("[UDPDetection] Monitoring adresses:");
 
         for (int i = 0; i < args.length; i++) {
-            System.out.println(args[i]);
+            System.out.println("\t" + args[i]);
         }
 
         ReaderFromQueue reader = new ReaderFromQueue("tcp://147.175.98.24:61616", "PCAPS_UDP");
@@ -31,7 +32,7 @@ public class UDPDetection {
 
         while ((tempFile = reader.readFile()) != null) {
             String fileName = tempFile.getName();
-            System.out.println("File name: " + fileName);
+            System.out.println("[UDPDetection] Starting detector on " + fileName);
             detector.run(tempFile);
         }
 

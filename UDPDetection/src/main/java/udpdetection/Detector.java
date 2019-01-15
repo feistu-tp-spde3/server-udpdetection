@@ -42,7 +42,7 @@ public class Detector {
     // TTL pre zdrojove adresy
     private HashMap<String, Long> ttl = new HashMap<String, Long>();
     // Trieda na posielanie dat do DB
-    private DBConn db = new DBConn(--HOST--, --USER--, --PASS--);
+    // private DBConn db = new DBConn(--HOST--, --USER--, --PASS--);
 
     Detector(String args[]) {
         for (int i = 0; i < args.length; i++) {
@@ -64,31 +64,6 @@ public class Detector {
         }
 
         return ratio;
-    }
-
-    // detekcia UDP flood, vola sa po kazdom novom udp pakete
-    private void detection() throws IOException {
-        for (Map.Entry<String, Destination> entry : monitor.entrySet()) {
-            String key = entry.getKey();
-            Destination value = entry.getValue();
-            double r = ratio(value);
-
-            // experimentalna hodnota
-            if (r >= MAX_RATIO && isWithinTTL(key) == true) {
-                System.out.println("UDP flood alert to " + key + " from " + value.destinationAddress);
-
-                try {
-                    String msg = "UDP flood alert to " + key + " from " + value.destinationAddress;
-                    Socket socket = new Socket("147.175.106.17", 9999);
-                    DataOutputStream output = new DataOutputStream(socket.getOutputStream());
-                    output.writeUTF(msg);
-                    socket.close();
-                } catch (IOException ex) {
-                    ex.printStackTrace();
-                }
-                db.SendUDPFlood(key, value.destinationAddress);
-            }
-        }
     }
 
     // skontroluje ci je dana zdrojova adresa v ramci TTL
@@ -122,88 +97,107 @@ public class Detector {
 
         PcapHeader hdr = new PcapHeader(JMemory.POINTER);
         JBuffer buf = new JBuffer(JMemory.POINTER);
-        Ip4 ip = new Ip4();
-        Udp udp = new Udp();
-        Ethernet eth = new Ethernet();
         int id = JRegistry.mapDLTToId(pcap.datalink());
 
+        int parsed_packets = 0;
+        int monitored_packets = 0;
         while (pcap.nextEx(hdr, buf) == Pcap.NEXT_EX_OK) {
             PcapPacket packet = new PcapPacket(hdr, buf);
             packet.scan(id);
 
-            byte[] d_IP = new byte[4];
-            byte[] s_IP = new byte[4];
+            Ip4 ip = new Ip4();
+            Udp udp = new Udp();
 
-            s_IP = buf.getByteArray(12, 4);
-            d_IP = buf.getByteArray(16, 4);
+            if (!packet.hasHeader(ip) || !packet.hasHeader(udp)) {
+                continue;
+            }
 
-            byte protocol = buf.getByte(9);
+            parsed_packets++;
 
-            String dip = org.jnetpcap.packet.format.FormatUtils.ip(d_IP);
-            String sip = org.jnetpcap.packet.format.FormatUtils.ip(s_IP);
+            byte[] s_ip = new byte[4];
+            s_ip = packet.getHeader(ip).source();
+            String sip = org.jnetpcap.packet.format.FormatUtils.ip(s_ip);
 
-            // mame udp paket
-            if (protocol == 17) {
-                boolean isMonitored = true;
-                String _ip = "";
+            byte[] d_ip = new byte[4];
+            d_ip = packet.getHeader(ip).destination();
+            String dip = org.jnetpcap.packet.format.FormatUtils.ip(d_ip);
 
-                for (String i : monitoredIP) {
-                    if (i.equals(sip) || i.equals(dip)) {
-                        isMonitored = true;
-                        _ip = i;
-                        break;
-                    }
+
+            boolean isMonitored = false;
+            String _ip = "";
+
+            for (String i : monitoredIP) {
+                if (i.equals(sip) || i.equals(dip)) {
+                    isMonitored = true;
+                    _ip = i;
+                    break;
                 }
+            }
 
-                // ak ano...
-                if (isMonitored) {
-                    if (_ip.equals(dip)) {
-                        if (monitor.containsKey(sip)) {
-                            long td = monitor.get(sip).toDestination;
-                            td++;
-                            monitor.get(sip).toDestination = td;
-                        } else {
-                            Destination newDst = new Destination();
-                            newDst.destinationAddress = _ip;
-                            newDst.toDestination = 1;
+            if (!isMonitored) {
+                continue;
+            }
 
-                            ttl.put(sip, System.currentTimeMillis());
-                            monitor.put(sip, newDst);
-                        }
-                    }
+            monitored_packets++;
 
-                    if (_ip.equals(sip)) {
-                        if (monitor.containsKey(dip)) {
-                            long fd = monitor.get(dip).fromDestination;
-                            fd++;
-                            monitor.get(dip).fromDestination = fd;
-                        } else {
-                            Destination newDst = new Destination();
-                            newDst.destinationAddress = _ip;
-                            newDst.fromDestination = 1;
+            if (_ip.equals(dip)) {
+                if (monitor.containsKey(sip)) {
+                    long td = monitor.get(sip).toDestination;
+                    td++;
+                    monitor.get(sip).toDestination = td;
+                } else {
+                    Destination newDst = new Destination();
+                    newDst.destinationAddress = _ip;
+                    newDst.toDestination = 1;
 
-                            ttl.put(dip, System.currentTimeMillis());
-                            monitor.put(dip, newDst);
-                        }
-                    }
+                    ttl.put(sip, System.currentTimeMillis());
+                    monitor.put(sip, newDst);
                 }
+            }
 
-                detection();
+            if (_ip.equals(sip)) {
+                if (monitor.containsKey(dip)) {
+                    long fd = monitor.get(dip).fromDestination;
+                    fd++;
+                    monitor.get(dip).fromDestination = fd;
+                } else {
+                    Destination newDst = new Destination();
+                    newDst.destinationAddress = _ip;
+                    newDst.fromDestination = 1;
 
-                for (Map.Entry<String, Long> entry : ttl.entrySet()) {
-                    long currentTime = System.currentTimeMillis();
+                    ttl.put(dip, System.currentTimeMillis());
+                    monitor.put(dip, newDst);
+                }
+            }
 
-                    TimeUnit unit = TimeUnit.SECONDS;
-                    long passedSeconds = unit.convert(currentTime - entry.getValue(), TimeUnit.MILLISECONDS);
+            System.out.println(">> Parsed " + pcapFile.getPath() + " (packets: " + Integer.toString(parsed_packets) + ", monitored: " + Integer.toString(monitored_packets) + ")");
 
-                    if (passedSeconds > TTL) {
-                        entry.setValue(currentTime);
+            // detekcia
+            for (Map.Entry<String, Destination> entry : monitor.entrySet()) {
+                String key = entry.getKey();
+                Destination value = entry.getValue();
+                double r = ratio(value);
 
-                        // vvynulovanie monitora
-                        if (monitor.containsKey(entry.getKey())) {
-                            monitor.get(entry.getKey()).fromDestination = 0;
-                            monitor.get(entry.getKey()).toDestination = 0;
-                        }
+                // experimentalna hodnota
+                if (r >= MAX_RATIO && isWithinTTL(key) == true) {
+                    System.out.println("UDP flood alert to " + key + " from " + value.destinationAddress);
+                    // db.SendUDPFlood(key, value.destinationAddress);
+                }
+            }
+
+            for (Map.Entry<String, Long> entry : ttl.entrySet()) {
+                long currentTime = System.currentTimeMillis();
+
+                TimeUnit unit = TimeUnit.SECONDS;
+                long passedSeconds = unit.convert(currentTime - entry.getValue(), TimeUnit.MILLISECONDS);
+
+                if (passedSeconds > TTL) {
+                    entry.setValue(currentTime);
+
+                    // vvynulovanie monitora
+                    if (monitor.containsKey(entry.getKey())) {
+                        monitor.get(entry.getKey()).fromDestination = 0;
+                        monitor.get(entry.getKey()).toDestination = 0;
                     }
                 }
             }
