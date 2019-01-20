@@ -42,12 +42,14 @@ public class Detector {
     // TTL pre zdrojove adresy
     private HashMap<String, Long> ttl = new HashMap<String, Long>();
     // Trieda na posielanie dat do DB
-    // private DBConn db = new DBConn(--HOST--, --USER--, --PASS--);
+    private DBConn db;
 
     Detector(String args[]) {
         for (int i = 0; i < args.length; i++) {
             monitoredIP.add(args[i]);
         }
+
+        db = new DBConn("<host>:<port>/<database_name>", "<username>", "<password>");
     }
 
     // vypocet ratio fukcie
@@ -55,6 +57,7 @@ public class Detector {
         long from = dst.fromDestination;
         long to = dst.toDestination;
 
+        /*
         double ratio = 0.0;
 
         if (from == 0) {
@@ -62,8 +65,15 @@ public class Detector {
         } else {
             ratio = (double) (to / from);
         }
+        */
 
-        return ratio;
+        if (from == 0)
+            return (double) to;
+
+        if (to == 0)
+            return (double) from;
+
+        return (double)(to / from);
     }
 
     // skontroluje ci je dana zdrojova adresa v ramci TTL
@@ -169,36 +179,38 @@ public class Detector {
                     monitor.put(dip, newDst);
                 }
             }
+        }
 
-            System.out.println(">> Parsed " + pcapFile.getPath() + " (packets: " + Integer.toString(parsed_packets) + ", monitored: " + Integer.toString(monitored_packets) + ")");
+        System.out.println(">> Parsed " + pcapFile.getPath() + " (packets: " + Integer.toString(parsed_packets) + ", monitored: " + Integer.toString(monitored_packets) + ")");
 
-            // detekcia
-            for (Map.Entry<String, Destination> entry : monitor.entrySet()) {
-                String key = entry.getKey();
-                Destination value = entry.getValue();
-                double r = ratio(value);
+        // detekcia
+        for (Map.Entry<String, Destination> entry : monitor.entrySet()) {
+            String key = entry.getKey();
+            Destination value = entry.getValue();
+            System.out.println("From destination: " + Long.toString(value.fromDestination) + ", to destination: " + Long.toString(value.toDestination));
+            double r = ratio(value);
 
-                // experimentalna hodnota
-                if (r >= MAX_RATIO && isWithinTTL(key) == true) {
-                    System.out.println("UDP flood alert to " + key + " from " + value.destinationAddress);
-                    // db.SendUDPFlood(key, value.destinationAddress);
-                }
+            System.out.println(">> Ratio: " + Double.toString(r) + ", MAX_RATIO: " + Double.toString(MAX_RATIO));
+
+            if (r >= MAX_RATIO && isWithinTTL(key) == true) {
+                System.out.println("[+] UDP flood alert to " + key + " from " + value.destinationAddress);
+                db.SendUDPFlood(key, value.destinationAddress, r);
             }
+        }
 
-            for (Map.Entry<String, Long> entry : ttl.entrySet()) {
-                long currentTime = System.currentTimeMillis();
+        for (Map.Entry<String, Long> entry : ttl.entrySet()) {
+            long currentTime = System.currentTimeMillis();
 
-                TimeUnit unit = TimeUnit.SECONDS;
-                long passedSeconds = unit.convert(currentTime - entry.getValue(), TimeUnit.MILLISECONDS);
+            TimeUnit unit = TimeUnit.SECONDS;
+            long passedSeconds = unit.convert(currentTime - entry.getValue(), TimeUnit.MILLISECONDS);
 
-                if (passedSeconds > TTL) {
-                    entry.setValue(currentTime);
+            if (passedSeconds > TTL) {
+                entry.setValue(currentTime);
 
-                    // vvynulovanie monitora
-                    if (monitor.containsKey(entry.getKey())) {
-                        monitor.get(entry.getKey()).fromDestination = 0;
-                        monitor.get(entry.getKey()).toDestination = 0;
-                    }
+                // vvynulovanie monitora
+                if (monitor.containsKey(entry.getKey())) {
+                    monitor.get(entry.getKey()).fromDestination = 0;
+                    monitor.get(entry.getKey()).toDestination = 0;
                 }
             }
         }
